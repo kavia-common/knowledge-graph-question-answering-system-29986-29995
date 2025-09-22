@@ -7,7 +7,7 @@ can act as a teaching reference. You can extend RuleBasedNLPMappings with more
 patterns over time.
 """
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 
 @dataclass
@@ -25,51 +25,72 @@ class RuleBasedNLPMappings:
     For production, consider using a proper NLP pipeline and entity extraction.
 
     Current supported patterns (case-insensitive):
-    - "who works at {organization}?"
-    - "where is {person} located?"
-    - "list people in {organization}"
-    - "what organizations is {person} affiliated with?"
+    - "who works at <organization>?"
+    - "where is <person> located?"
+    - "list people in <organization>"
+    - "what organizations is <person> affiliated with?"
 
     Sachin-specific examples supported (case-insensitive):
     - "what teams did sachin tendulkar play for?"
       Example Cypher:
-        MATCH (p:Person {name: $person})-[:PLAYED_FOR|:REPRESENTED|:CAPTAINED]->(t)
+        MATCH (p:Person)-[:PLAYED_FOR|:REPRESENTED|:CAPTAINED]->(t)
+        WHERE toLower(p.name) CONTAINS toLower($person)
+           OR toLower(coalesce(p.full_name, '')) CONTAINS toLower($person)
+           OR toLower(coalesce(p.nickname, '')) CONTAINS toLower($person)
         RETURN DISTINCT t.name AS team
-        LIMIT $top_k
+        LIMIT $TOP_K
     - "what records does sachin tendulkar hold?"
       Example Cypher:
-        MATCH (p:Person {name: $person})-[:HOLDS_RECORD]->(r:Record)
+        MATCH (p:Person)-[:HOLDS_RECORD]->(r:Record)
+        WHERE toLower(p.name) CONTAINS toLower($person)
+           OR toLower(coalesce(p.full_name, '')) CONTAINS toLower($person)
+           OR toLower(coalesce(p.nickname, '')) CONTAINS toLower($person)
         RETURN r.label AS record, r.value AS value, r.unit AS unit, r.year AS year
-        LIMIT $top_k
+        LIMIT $TOP_K
     - "when did sachin tendulkar debut in odi/test/international cricket?"
       Example Cypher (format-aware):
-        MATCH (p:Person {name: $person})-[:DEBUTED_IN]->(d:Record {type:'Debut'})
-        WHERE ($format IS NULL) OR toLower(d.format) = toLower($format)
+        MATCH (p:Person)-[:DEBUTED_IN]->(d:Record {type:'Debut'})
+        WHERE (toLower(p.name) CONTAINS toLower($person)
+           OR toLower(coalesce(p.full_name, '')) CONTAINS toLower($person)
+           OR toLower(coalesce(p.nickname, '')) CONTAINS toLower($person))
+          AND (($format IS NULL) OR toLower(d.format) = toLower($format))
         RETURN d.format AS format, d.year AS year, d.opponent AS opponent, d.location AS location
         ORDER BY d.year ASC
-        LIMIT $top_k
+        LIMIT $TOP_K
     - "when did sachin tendulkar retire?"
       Example Cypher:
-        MATCH (p:Person {name: $person})-[:RETIRED_IN]->(r:Record {type:'Retirement'})
+        MATCH (p:Person)-[:RETIRED_IN]->(r:Record {type:'Retirement'})
+        WHERE toLower(p.name) CONTAINS toLower($person)
+           OR toLower(coalesce(p.full_name, '')) CONTAINS toLower($person)
+           OR toLower(coalesce(p.nickname, '')) CONTAINS toLower($person)
         RETURN r.format AS format, r.year AS year, r.opponent AS opponent, r.location AS location
         ORDER BY r.year ASC
-        LIMIT $top_k
+        LIMIT $TOP_K
     - "what are the career statistics of sachin tendulkar in odi/test/international?"
       Example Cypher (format-aware):
-        MATCH (p:Person {name: $person})-[:FORMAT_STATS]->(s:Record {type:'Stats'})
-        WHERE ($format IS NULL) OR toLower(s.format) = toLower($format)
+        MATCH (p:Person)-[:FORMAT_STATS]->(s:Record {type:'Stats'})
+        WHERE (toLower(p.name) CONTAINS toLower($person)
+           OR toLower(coalesce(p.full_name, '')) CONTAINS toLower($person)
+           OR toLower(coalesce(p.nickname, '')) CONTAINS toLower($person))
+          AND (($format IS NULL) OR toLower(s.format) = toLower($format))
         RETURN s.format AS format, s.matches AS matches, s.runs AS runs, s.hundreds AS hundreds, s.fifties AS fifties, s.average AS average
         ORDER BY s.format
-        LIMIT $top_k
+        LIMIT $TOP_K
     - "where was sachin tendulkar born?"
       Example Cypher:
-        MATCH (p:Person {name: $person})-[:BORN_IN]->(c:City)
+        MATCH (p:Person)-[:BORN_IN]->(c:City)
+        WHERE toLower(p.name) CONTAINS toLower($person)
+           OR toLower(coalesce(p.full_name, '')) CONTAINS toLower($person)
+           OR toLower(coalesce(p.nickname, '')) CONTAINS toLower($person)
         OPTIONAL MATCH (c)-[:IN_COUNTRY]->(country:Country)
         RETURN c.name AS city, country.name AS country
-        LIMIT $top_k
+        LIMIT $TOP_K
     - "tell me about sachin tendulkar"
       Example Cypher (general info summary):
-        MATCH (p:Person {name: $person})
+        MATCH (p:Person)
+        WHERE toLower(p.name) CONTAINS toLower($person)
+           OR toLower(coalesce(p.full_name, '')) CONTAINS toLower($person)
+           OR toLower(coalesce(p.nickname, '')) CONTAINS toLower($person)
         OPTIONAL MATCH (p)-[:BORN_IN]->(city:City)
         OPTIONAL MATCH (p)-[:FORMAT_STATS]->(s:Record {type:'Stats'})
         RETURN p.name AS name, p.full_name AS full_name, p.nickname AS nickname, p.batting_style AS batting_style,
@@ -77,6 +98,63 @@ class RuleBasedNLPMappings:
                city.name AS birth_city, collect({format:s.format, runs:s.runs, matches:s.matches}) AS formats
         LIMIT 1
     """
+
+    def _normalize_person_input(self, person: str) -> List[str]:
+        """
+        Normalize a user-supplied person name into a list of possible aliases to try.
+        Includes:
+        - Raw form
+        - Stripped of periods (e.g., 'S. Tendulkar' -> 'S Tendulkar')
+        - Simple initial expansion if it looks like 'X. Lastname' -> ['X Lastname', 'Sachin Tendulkar'] for demo
+
+        Note: This is a light heuristic. In production, alias expansion would come from the KG or an alias table.
+        """
+        p = (person or "").strip()
+        if not p:
+            return []
+        variants = {p, p.replace(".", "").strip()}
+
+        # Demo-focused: If looks like 'S Tendulkar' or 'S. Tendulkar', add 'Sachin Tendulkar'
+        tokens = p.replace(".", "").split()
+        if len(tokens) == 2 and len(tokens[0]) == 1 and tokens[1].lower() == "tendulkar":
+            variants.add("Sachin Tendulkar")
+
+        return [v for v in variants if v]
+
+    def _person_where_clause(self, field: str = "p") -> str:
+        """
+        Build a reusable Cypher WHERE clause that matches Person by:
+        - case-insensitive exact name
+        - case-insensitive substring (CONTAINS)
+        - matching against common alias properties if present (full_name, nickname)
+
+        Usage: ... MATCH (p:Person) WHERE <clause> ...
+        It expects parameters:
+          $person OR $persons (list)
+        """
+        # We support a single $person OR a list $persons; if list present we OR across them.
+        # Using coalesce toLower to avoid null issues for optional properties.
+        # Any of the properties matching is accepted.
+        single_pred = (
+            "("
+            " toLower({f}.name) CONTAINS toLower($person) OR "
+            " toLower(coalesce({f}.full_name, '')) CONTAINS toLower($person) OR "
+            " toLower(coalesce({f}.nickname, '')) CONTAINS toLower($person) "
+            ")"
+        ).format(f=field)
+
+        list_pred = (
+            "("
+            " ANY(personParam IN $persons WHERE "
+            "   toLower({f}.name) CONTAINS toLower(personParam) OR "
+            "   toLower(coalesce({f}.full_name, '')) CONTAINS toLower(personParam) OR "
+            "   toLower(coalesce({f}.nickname, '')) CONTAINS toLower(personParam)"
+            " )"
+            ")"
+        ).format(f=field)
+
+        # Include both, the unused one will be harmless if param absent.
+        return f"(({list_pred}) OR ({single_pred}))"
 
     def map_question(self, question: str, top_k: int = 10) -> Optional[CypherQuery]:
         """
@@ -98,7 +176,7 @@ class RuleBasedNLPMappings:
         # Generic demo rules (existing)
         # -------------------------
 
-        # Pattern: who works at {organization}
+        # Pattern: who works at <organization>
         if q.startswith("who works at "):
             org = q.replace("who works at ", "", 1).rstrip("?").strip()
             if org:
@@ -110,19 +188,26 @@ class RuleBasedNLPMappings:
                     parameters={"org": org, "top_k": top_k},
                 )
 
-        # Pattern: where is {person} located
+        # Pattern: where is <person> located
         if q.startswith("where is ") and q.endswith(" located?"):
             person = q[len("where is "):-len(" located?")].strip()
             if person:
+                persons = self._normalize_person_input(person)
+                params = {"top_k": top_k}
+                if len(persons) > 1:
+                    params["persons"] = persons
+                else:
+                    params["person"] = persons[0] if persons else person
                 return CypherQuery(
                     query=(
-                        "MATCH (p:Person {name: $person})-[:LOCATED_IN]->(l:Location) "
+                        "MATCH (p:Person)-[:LOCATED_IN]->(l:Location) "
+                        f"WHERE {self._person_where_clause('p')} "
                         "RETURN l.name AS location LIMIT $top_k"
                     ),
-                    parameters={"person": person, "top_k": top_k},
+                    parameters=params,
                 )
 
-        # Pattern: list people in {organization}
+        # Pattern: list people in <organization>
         if q.startswith("list people in "):
             org = q.replace("list people in ", "", 1).rstrip("?").strip()
             if org:
@@ -134,31 +219,45 @@ class RuleBasedNLPMappings:
                     parameters={"org": org, "top_k": top_k},
                 )
 
-        # Pattern: what organizations is {person} affiliated with
+        # Pattern: what organizations is <person> affiliated with
         if q.startswith("what organizations is ") and q.endswith(" affiliated with?"):
             person = q.replace("what organizations is ", "", 1).replace(" affiliated with?", "", 1).strip()
             if person:
+                persons = self._normalize_person_input(person)
+                params = {"top_k": top_k}
+                if len(persons) > 1:
+                    params["persons"] = persons
+                else:
+                    params["person"] = persons[0] if persons else person
                 return CypherQuery(
                     query=(
-                        "MATCH (p:Person {name: $person})-[:WORKS_AT]->(o:Organization) "
+                        "MATCH (p:Person)-[:WORKS_AT]->(o:Organization) "
+                        f"WHERE {self._person_where_clause('p')} "
                         "RETURN o.name AS organization ORDER BY o.name LIMIT $top_k"
                     ),
-                    parameters={"person": person, "top_k": top_k},
+                    parameters=params,
                 )
 
         # Fallback: try a basic generic person by name lookup
         if q.startswith("who is "):
             person = q.replace("who is ", "", 1).rstrip("?").strip()
             if person:
+                persons = self._normalize_person_input(person)
+                params = {"top_k": top_k}
+                if len(persons) > 1:
+                    params["persons"] = persons
+                else:
+                    params["person"] = persons[0] if persons else person
                 return CypherQuery(
                     query=(
-                        "MATCH (p:Person {name: $person}) "
+                        "MATCH (p:Person) "
+                        f"WHERE {self._person_where_clause('p')} "
                         "OPTIONAL MATCH (p)-[:WORKS_AT]->(o:Organization) "
                         "OPTIONAL MATCH (p)-[:LOCATED_IN]->(l:Location) "
                         "RETURN p.name AS person, o.name AS organization, l.name AS location "
                         "LIMIT $top_k"
                     ),
-                    parameters={"person": person, "top_k": top_k},
+                    parameters=params,
                 )
 
         # -------------------------
@@ -174,7 +273,8 @@ class RuleBasedNLPMappings:
            q.strip() == "teams sachin tendulkar played for?":
             return CypherQuery(
                 query=(
-                    "MATCH (p:Person {name: $person})-[:PLAYED_FOR|:REPRESENTED|:CAPTAINED]->(t) "
+                    "MATCH (p:Person)-[:PLAYED_FOR|:REPRESENTED|:CAPTAINED]->(t) "
+                    f"WHERE {self._person_where_clause('p')} "
                     "RETURN DISTINCT t.name AS team "
                     "ORDER BY team "
                     "LIMIT $top_k"
@@ -187,7 +287,8 @@ class RuleBasedNLPMappings:
            q.strip() in {"sachin tendulkar records?", "records of sachin tendulkar?"}:
             return CypherQuery(
                 query=(
-                    "MATCH (p:Person {name: $person})-[:HOLDS_RECORD]->(r:Record) "
+                    "MATCH (p:Person)-[:HOLDS_RECORD]->(r:Record) "
+                    f"WHERE {self._person_where_clause('p')} "
                     "RETURN r.label AS record, r.value AS value, r.unit AS unit, r.year AS year "
                     "ORDER BY record "
                     "LIMIT $top_k"
@@ -217,8 +318,9 @@ class RuleBasedNLPMappings:
             fmt = _extract_format(q)  # None means all formats
             return CypherQuery(
                 query=(
-                    "MATCH (p:Person {name: $person})-[:DEBUTED_IN]->(d:Record {type:'Debut'}) "
-                    "WHERE ($format IS NULL) OR toLower(d.format) = toLower($format) "
+                    "MATCH (p:Person)-[:DEBUTED_IN]->(d:Record {type:'Debut'}) "
+                    f"WHERE {self._person_where_clause('p')} "
+                    "AND (($format IS NULL) OR toLower(d.format) = toLower($format)) "
                     "RETURN d.format AS format, d.year AS year, d.opponent AS opponent, d.location AS location "
                     "ORDER BY d.year ASC "
                     "LIMIT $top_k"
@@ -231,8 +333,9 @@ class RuleBasedNLPMappings:
             fmt = _extract_format(q)  # Optional format filter
             return CypherQuery(
                 query=(
-                    "MATCH (p:Person {name: $person})-[:RETIRED_IN]->(r:Record {type:'Retirement'}) "
-                    "WHERE ($format IS NULL) OR toLower(r.format) = toLower($format) "
+                    "MATCH (p:Person)-[:RETIRED_IN]->(r:Record {type:'Retirement'}) "
+                    f"WHERE {self._person_where_clause('p')} "
+                    "AND (($format IS NULL) OR toLower(r.format) = toLower($format)) "
                     "RETURN r.format AS format, r.year AS year, r.opponent AS opponent, r.location AS location "
                     "ORDER BY r.year ASC "
                     "LIMIT $top_k"
@@ -246,8 +349,9 @@ class RuleBasedNLPMappings:
             fmt = _extract_format(q)
             return CypherQuery(
                 query=(
-                    "MATCH (p:Person {name: $person})-[:FORMAT_STATS]->(s:Record {type:'Stats'}) "
-                    "WHERE ($format IS NULL) OR toLower(s.format) = toLower($format) "
+                    "MATCH (p:Person)-[:FORMAT_STATS]->(s:Record {type:'Stats'}) "
+                    f"WHERE {self._person_where_clause('p')} "
+                    "AND (($format IS NULL) OR toLower(s.format) = toLower($format)) "
                     "RETURN s.format AS format, s.matches AS matches, s.runs AS runs, "
                     "s.hundreds AS hundreds, s.fifties AS fifties, s.average AS average "
                     "ORDER BY s.format "
@@ -261,7 +365,8 @@ class RuleBasedNLPMappings:
            q.strip() in {"sachin tendulkar birthplace?", "birthplace of sachin tendulkar?"}:
             return CypherQuery(
                 query=(
-                    "MATCH (p:Person {name: $person})-[:BORN_IN]->(c:City) "
+                    "MATCH (p:Person)-[:BORN_IN]->(c:City) "
+                    f"WHERE {self._person_where_clause('p')} "
                     "OPTIONAL MATCH (c)-[:IN_COUNTRY]->(country:Country) "
                     "RETURN c.name AS city, country.name AS country "
                     "LIMIT $top_k"
@@ -273,7 +378,8 @@ class RuleBasedNLPMappings:
         if q.startswith("tell me about ") and SACHIN in q or q.strip() in {"about sachin tendulkar", "who is sachin tendulkar"}:
             return CypherQuery(
                 query=(
-                    "MATCH (p:Person {name: $person}) "
+                    "MATCH (p:Person) "
+                    f"WHERE {self._person_where_clause('p')} "
                     "OPTIONAL MATCH (p)-[:BORN_IN]->(city:City) "
                     "OPTIONAL MATCH (p)-[:FORMAT_STATS]->(s:Record {type:'Stats'}) "
                     "RETURN p.name AS name, p.full_name AS full_name, p.nickname AS nickname, "
