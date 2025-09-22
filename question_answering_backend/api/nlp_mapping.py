@@ -135,17 +135,18 @@ class RuleBasedNLPMappings:
         # We support a single $person OR a list $persons; if list present we OR across them.
         # Using coalesce toLower to avoid null issues for optional properties.
         # Any of the properties matching is accepted.
+        # Use COALESCE to avoid unbound parameter errors if either is missing.
         single_pred = (
             "("
-            " toLower({f}.name) CONTAINS toLower($person) OR "
-            " toLower(coalesce({f}.full_name, '')) CONTAINS toLower($person) OR "
-            " toLower(coalesce({f}.nickname, '')) CONTAINS toLower($person) "
+            " toLower({f}.name) CONTAINS toLower(coalesce($person, '')) OR "
+            " toLower(coalesce({f}.full_name, '')) CONTAINS toLower(coalesce($person, '')) OR "
+            " toLower(coalesce({f}.nickname, '')) CONTAINS toLower(coalesce($person, '')) "
             ")"
         ).format(f=field)
 
         list_pred = (
             "("
-            " ANY(personParam IN $persons WHERE "
+            " ANY(personParam IN coalesce($persons, []) WHERE "
             "   toLower({f}.name) CONTAINS toLower(personParam) OR "
             "   toLower(coalesce({f}.full_name, '')) CONTAINS toLower(personParam) OR "
             "   toLower(coalesce({f}.nickname, '')) CONTAINS toLower(personParam)"
@@ -153,7 +154,7 @@ class RuleBasedNLPMappings:
             ")"
         ).format(f=field)
 
-        # Include both, the unused one will be harmless if param absent.
+        # Include both; with COALESCE this is safe if one is absent.
         return f"(({list_pred}) OR ({single_pred}))"
 
     def map_question(self, question: str, top_k: int = 10) -> Optional[CypherQuery]:

@@ -96,6 +96,27 @@ class _Neo4jService:
         try:
             assert self._driver is not None  # for type-checkers
             with self._driver.session(database=database) as session:
+                # Defensive normalization of person/persons parameters:
+                # If the Cypher uses either $person or $persons and the other is provided,
+                # normalize so both are available to prevent "Expected parameter(s)" errors.
+                # This is safe as unused parameters are ignored by Neo4j.
+                try:
+                    # Make a shallow copy to avoid mutating caller's dict
+                    params = dict(params)
+                    if "persons" in params and "person" not in params:
+                        # Provide a single person convenience if a list is supplied
+                        lst = params.get("persons") or []
+                        if isinstance(lst, (list, tuple)) and lst:
+                            params["person"] = lst[0]
+                    if "person" in params and "persons" not in params:
+                        # Provide a list convenience if single person is supplied
+                        p = params.get("person")
+                        if isinstance(p, str) and p != "":
+                            params["persons"] = [p]
+                except Exception:
+                    # Do not fail normalization; proceed with original params
+                    pass
+
                 result = session.run(query, **params)
                 # Safe materialization to list of dict rows
                 rows: List[Dict[str, Any]] = [record.data() for record in result]  # type: ignore
