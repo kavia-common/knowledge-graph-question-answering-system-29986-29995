@@ -15,6 +15,21 @@ from pathlib import Path
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Load environment variables from .env file if present.
+# This ensures that components like the Neo4j service, which read from os.environ,
+# get values when running locally or in environments where the process env is not pre-populated.
+try:
+    from dotenv import load_dotenv
+    # Prefer .env in the Django project root (same dir as manage.py)
+    dot_env_path = BASE_DIR / ".env"
+    # Only load if file exists; do not override variables already set by the container environment
+    if dot_env_path.exists():
+        load_dotenv(dotenv_path=dot_env_path, override=False)
+except Exception:
+    # Fail-safe: settings should still load even if python-dotenv is unavailable,
+    # e.g., during some CI steps before dependencies are installed.
+    pass
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
