@@ -29,6 +29,7 @@ class RuleBasedNLPMappings:
     - "where is <person> located?"
     - "list people in <organization>"
     - "what organizations is <person> affiliated with?"
+    - "who is the coach of <person>?" / "who coached <person>?"
 
     Sachin-specific examples supported (case-insensitive):
     - "what teams did sachin tendulkar play for?"
@@ -235,6 +236,38 @@ class RuleBasedNLPMappings:
                         "MATCH (p:Person)-[:WORKS_AT]->(o:Organization) "
                         f"WHERE {self._person_where_clause('p')} "
                         "RETURN o.name AS organization ORDER BY o.name LIMIT $top_k"
+                    ),
+                    parameters=params,
+                )
+
+        # Pattern: who is the coach of <person> / who coached <person>
+        # Supports: "who is the coach of sachin tendulkar?", "who coached sachin tendulkar?"
+        if q.startswith("who is the coach of ") or q.startswith("who coached "):
+            person = (
+                q.replace("who is the coach of ", "", 1)
+                 .replace("who coached ", "", 1)
+                 .rstrip("?")
+                 .strip()
+            )
+            if person:
+                persons = self._normalize_person_input(person)
+                params = {"top_k": top_k}
+                if len(persons) > 1:
+                    params["persons"] = persons
+                else:
+                    params["person"] = persons[0] if persons else person
+                # We support both relationship directions for robustness:
+                # (coach)-[:COACHED]->(student) and (student)-[:COACHED_BY]->(coach)
+                return CypherQuery(
+                    query=(
+                        "MATCH (p:Person) "
+                        f"WHERE {self._person_where_clause('p')} "
+                        "OPTIONAL MATCH (c1:Person)-[:COACHED]->(p) "
+                        "OPTIONAL MATCH (p)-[:COACHED_BY]->(c2:Person) "
+                        "WITH p, coalesce(c1, c2) AS coach "
+                        "WHERE coach IS NOT NULL "
+                        "RETURN DISTINCT coach.name AS coach "
+                        "LIMIT $top_k"
                     ),
                     parameters=params,
                 )

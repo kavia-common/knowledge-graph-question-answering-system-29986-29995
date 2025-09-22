@@ -117,6 +117,22 @@ class Command(BaseCommand):
             // City -> Team link (home association)
             MERGE (mumbai)-[:HOME_TEAM]->(mumbaiTeam)
 
+            // --------------------------------------------
+            // Coaching relationships for Sachin Tendulkar
+            // --------------------------------------------
+            // Add coach persons
+            CREATE (achrekar:Person {name:'Ramakant Achrekar'})
+            // Optional: Guru/mentor figures (for demo coverage)
+            CREATE (gavaskar:Person {name:'Sunil Gavaskar'})
+
+            // Connect coaches to Sachin using both directions for robustness
+            MERGE (achrekar)-[:COACHED {from:1984, to:1990}]->(sachin)
+            MERGE (sachin)-[:COACHED_BY {from:1984, to:1990}]->(achrekar)
+
+            // Example: Gavaskar as an inspiration/mentor (using COACHED for demo purposes)
+            MERGE (gavaskar)-[:COACHED {note:'Mentor/Inspiration'}]->(sachin)
+            MERGE (sachin)-[:COACHED_BY {note:'Mentor/Inspiration'}]->(gavaskar)
+
             RETURN 'ok' AS status
             """
         )
