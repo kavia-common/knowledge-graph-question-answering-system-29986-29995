@@ -242,10 +242,19 @@ class RuleBasedNLPMappings:
 
         # Pattern: who is the coach of <person> / who coached <person>
         # Supports: "who is the coach of sachin tendulkar?", "who coached sachin tendulkar?"
-        if q.startswith("who is the coach of ") or q.startswith("who coached "):
+        # Also support shortform fragments: "coach of sachin tendulkar", "coach sachin tendulkar"
+        if (
+            q.startswith("who is the coach of ")
+            or q.startswith("who coached ")
+            or q.startswith("coach of ")
+            or q.startswith("coach ")
+        ):
+            # Extract the person by removing the leading pattern variants and optional trailing '?'
             person = (
                 q.replace("who is the coach of ", "", 1)
                  .replace("who coached ", "", 1)
+                 .replace("coach of ", "", 1)
+                 .replace("coach ", "", 1)
                  .rstrip("?")
                  .strip()
             )
