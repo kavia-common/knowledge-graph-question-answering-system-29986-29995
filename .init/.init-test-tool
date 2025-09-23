@@ -1,0 +1,4 @@
+{
+    "command": "python manage.py test",
+    "working_directory": "/home/kavia/workspace/code-generation/knowledge-graph-question-answering-system-29986-29995/question_answering_backend"
+}
