@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from neo4j import GraphDatabase, basic_auth
 from neo4j.exceptions import Neo4jError, ServiceUnavailable, AuthError
+import socket
 
 
 class _Neo4jService:
@@ -58,12 +59,43 @@ class _Neo4jService:
             )
             return
 
+        # Basic URI validation and hints for common pitfalls
+        uri = env["uri"] or ""
+        if not (uri.startswith("bolt://") or uri.startswith("neo4j://")):
+            self._config_err = (
+                "Invalid NEO4J_URI scheme. Use bolt://host:7687 for direct connections or "
+                "neo4j://host:7687 for Neo4j Aura or DNS-SRV based routing."
+            )
+            return
+
         try:
+            # Optional encrypted connections (e.g., Aura requires encryption)
+            encrypted_env = os.getenv("NEO4J_ENCRYPTED", "").strip().lower()
+            encrypted = encrypted_env in ("1", "true", "yes", "on")
+
+            # Basic DNS resolution pre-check to give clearer errors before driver tries to connect
+            try:
+                # Extract hostname portion for a quick getaddrinfo check
+                host_port = uri.split("://", 1)[1]
+                host = host_port.split("/", 1)[0].split(":", 1)[0]
+                # This may raise socket.gaierror if DNS cannot resolve
+                socket.getaddrinfo(host, None)
+            except socket.gaierror as dns_exc:
+                self._config_err = (
+                    "Neo4j hostname cannot be resolved. Please verify NEO4J_URI host, DNS/network access, "
+                    f"and consider using neo4j:// scheme for Aura. DNS error: {dns_exc}"
+                )
+                return
+
             auth = basic_auth(env["user"], env["password"])
-            # Create the driver (does not verify connection until used)
-            self._driver = GraphDatabase.driver(env["uri"], auth=auth)
+            # Create the driver (does not verify connection until used).
+            # Pass encrypted if requested; the driver defaults are usually fine for TLS too.
+            self._driver = GraphDatabase.driver(uri, auth=auth, encrypted=encrypted)  # type: ignore[arg-type]
         except (AuthError, ServiceUnavailable, Neo4jError) as exc:
-            self._config_err = f"Failed to initialize Neo4j driver: {exc}"
+            self._config_err = (
+                "Failed to initialize Neo4j driver. Check credentials, URI, and network. "
+                f"Details: {exc}"
+            )
         except Exception as exc:  # broad fallback with clear message
             self._config_err = f"Unexpected error initializing Neo4j driver: {exc}"
 

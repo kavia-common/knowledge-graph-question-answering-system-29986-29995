@@ -19,8 +19,18 @@ Quick start:
    - python manage.py seed_graph
 
 5) Try the API
+   - Health: http://localhost:8000/api/health/
+   - Neo4j connectivity health: http://localhost:8000/api/health/neo4j/
+     Returns {"ok": true} if backend can connect to Neo4j. If you see errors like
+     "Cannot resolve address <host>:7687", verify your NEO4J_URI and network/DNS.
+     For Neo4j Aura, prefer neo4j://<host>:7687 and ensure outbound DNS is allowed.
    - POST http://localhost:8000/api/ask/
      Body: { "question": "Who works at Contoso?" }
    - Docs: http://localhost:8000/docs
+
+Notes:
+- Copy question_answering_backend/.env.example to question_answering_backend/.env and provide values.
+- For local Neo4j: NEO4J_URI=bolt://localhost:7687
+- For Neo4j Aura: NEO4J_URI=neo4j://<host>:7687 and consider NEO4J_ENCRYPTED=true
 
 Ocean Professional theme: blue (#2563EB) and amber (#F59E0B) accents reflected in API descriptions and metadata.

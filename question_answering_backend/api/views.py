@@ -6,6 +6,7 @@ from drf_yasg import openapi
 
 from .serializers import AskRequestSerializer, AskResponseSerializer
 from .services import qa_service
+from .neo4j_service import neo4j_service
 
 
 @api_view(['GET'])
@@ -16,6 +17,40 @@ def health(request):
     Returns 200 and a simple JSON message.
     """
     return Response({"message": "Server is up!"})
+
+
+# PUBLIC_INTERFACE
+@swagger_auto_schema(
+    method='get',
+    operation_id='neo4j_health',
+    operation_summary='Neo4j Connectivity Health',
+    operation_description=(
+        "Runs a lightweight Cypher (RETURN 1 AS ok) to verify Neo4j connectivity and configuration. "
+        "If this endpoint fails with a DNS error like 'Cannot resolve address ...:7687', "
+        "check your NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, and network/DNS settings. "
+        "For Neo4j Aura, prefer the neo4j:// scheme and ensure outbound DNS is allowed."
+    ),
+    responses={
+        200: openapi.Response(description="Connectivity OK"),
+        500: "Neo4j is not reachable or misconfigured",
+    },
+    tags=["Question Answering"],
+)
+@api_view(['GET'])
+def neo4j_health(request):
+    """
+    Perform a minimal connectivity check against Neo4j using a trivial Cypher query.
+
+    Returns:
+        200 with {"ok": true, "details": "..."} if the check succeeds,
+        500 with {"ok": false, "error": "<message>"} if it fails.
+    """
+    try:
+        rows = neo4j_service.run_cypher("RETURN 1 AS ok")
+        ok = bool(rows and rows[0].get("ok") == 1)
+        return Response({"ok": ok, "details": "Neo4j reachable."}, status=status.HTTP_200_OK)
+    except ValueError as exc:
+        return Response({"ok": False, "error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # PUBLIC_INTERFACE
